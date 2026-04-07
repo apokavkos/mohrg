@@ -1,0 +1,5 @@
+vendor/
+.env
+*.log
+*_audit_context.txt
+*_AI_CONTEXT.md
