@@ -8,14 +8,20 @@ class SeatAssetsServiceProvider extends AbstractSeatPlugin
 {
     public function boot()
     {
-        $this->add_routes();
-        $this->add_views();
+        $this->loadRoutesFrom(__DIR__ . '/Http/routes.php');
+        $this->loadViewsFrom(__DIR__ . '/resources/views', 'seat-assets');
+        $this->loadMigrationsFrom(__DIR__ . '/database/migrations');
+
+        $this->publishes([
+            __DIR__ . '/Config/package.sidebar.php' => config_path('package.sidebar.assets.php'),
+            __DIR__ . '/Config/Permissions/assets.permissions.php' => config_path('assets.permissions.php'),
+        ]);
     }
 
     public function register()
     {
         $this->mergeConfigFrom(__DIR__ . '/Config/package.sidebar.php', 'package.sidebar');
-        $this->registerPermissions(__DIR__ . '/Config/seat-assets.permissions.php', 'seat-assets');
+        $this->registerPermissions(__DIR__ . '/Config/Permissions/assets.permissions.php', 'assets');
     }
 
     public function getName(): string
@@ -36,17 +42,5 @@ class SeatAssetsServiceProvider extends AbstractSeatPlugin
     public function getPackagistVendorName(): string
     {
         return 'apokavkos';
-    }
-
-    private function add_routes()
-    {
-        if (!$this->app->routesAreCached()) {
-            $this->loadRoutesFrom(__DIR__ . '/Http/routes.php');
-        }
-    }
-
-    private function add_views()
-    {
-        $this->loadViewsFrom(__DIR__ . '/resources/views', 'seat-assets');
     }
 }
