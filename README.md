@@ -1,3 +1,3 @@
-# SeAT Asset Manager
+# mohrg
 
-A SeAT 5.x plugin for managing character and corporation assets.
+Fresh start repository.
