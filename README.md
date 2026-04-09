@@ -1,3 +1,0 @@
-# mohrg
-
-Fresh start repository.
