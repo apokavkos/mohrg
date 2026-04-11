@@ -8,6 +8,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Routing\Controller;
+use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Apokavkos\SeatImporting\Models\MarketHub;
 use Apokavkos\SeatImporting\Models\MarketItemData;
 use Apokavkos\SeatImporting\Models\MarketSetting;
@@ -20,6 +21,8 @@ use Seat\Eveapi\Models\Universe\UniverseStructure;
 
 class MarketHubController extends Controller
 {
+    use AuthorizesRequests;
+
     public function __construct(private readonly MarketMetricsService $metrics) {}
 
     public function index(Request $request): mixed
@@ -163,7 +166,9 @@ class MarketHubController extends Controller
                 ->where('t.typeID', $typeId)->first();
         } catch (\Exception) { $type = null; }
 
-        $priceRow = MarketItemData::where('type_id', $typeId)->latest('data_date')->first();
+        $priceRow = MarketItemData::where('type_id', $typeId)
+            ->latest('data_date')
+            ->first();
         if (! $type && ! $priceRow) return response()->json(['error' => 'Item not found'], 404);
 
         return response()->json([
