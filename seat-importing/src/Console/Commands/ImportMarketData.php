@@ -5,43 +5,23 @@ namespace Apokavkos\SeatImporting\Console\Commands;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\File;
 use Apokavkos\SeatImporting\Models\MarketHub;
 use Apokavkos\SeatImporting\Models\MarketImportLog;
 use Apokavkos\SeatImporting\Services\MarketMetricsService;
 
-/**
- * Artisan command: seat:importing:import
- *
- * Imports market price data from Fuzzwork or Tycoon CSV exports into the
- * market_item_data table, then recalculates all derived metrics per hub.
- *
- * Usage examples:
- *   php artisan seat:importing:import
- *   php artisan seat:importing:import --hub=1 --source=fuzzwork_csv --file=/srv/market.csv
- *   php artisan seat:importing:import --source=tycoon_csv --file=/srv/tycoon.csv --dry-run
- */
 class ImportMarketData extends Command
 {
     protected $signature = 'seat:importing:import
         {--hub=          : Hub ID to import for (defaults to all active hubs)}
         {--source=fuzzwork_csv : Import source (fuzzwork_csv|tycoon_csv)}
         {--file=         : Path to a local CSV file to import}
-        {--jita-region=  : Override Jita region ID}
+        {--download      : Automatically download the latest data from Fuzzwork}
+        {--jita-region=10000002 : Region ID to download from Fuzzwork}
         {--dry-run       : Parse and validate without writing to DB}';
 
     protected $description = 'Import market data from Fuzzwork or Tycoon CSV dumps into the seat-importing plugin database.';
-
-    // Fuzzwork aggregate CSV column names (region-specific aggregates download)
-    private const FUZZWORK_COLUMNS = [
-        'typeID', 'buy_percentile', 'buy_max', 'buy_avg', 'buy_stddev',
-        'buy_median', 'buy_volume', 'sell_percentile', 'sell_min', 'sell_avg',
-        'sell_stddev', 'sell_median', 'sell_volume', 'buy_orders', 'sell_orders',
-    ];
-
-    // Tycoon market CSV column names
-    private const TYCOON_COLUMNS = [
-        'typeid', 'region_id', 'buy_max', 'buy_volume', 'sell_min', 'sell_volume', 'timestamp',
-    ];
 
     private MarketMetricsService $metricsService;
 
@@ -56,6 +36,8 @@ class ImportMarketData extends Command
         $hubId      = $this->option('hub')   ? (int) $this->option('hub')   : null;
         $source     = $this->option('source') ?? config('seat-importing.import.default_source', 'fuzzwork_csv');
         $filePath   = $this->option('file')  ?? null;
+        $download   = (bool) $this->option('download');
+        $regionId   = $this->option('jita-region');
         $dryRun     = (bool) $this->option('dry-run');
 
         if (! in_array($source, ['fuzzwork_csv', 'tycoon_csv'], true)) {
@@ -78,11 +60,41 @@ class ImportMarketData extends Command
             }
         }
 
-        // Resolve the CSV path
-        $resolvedFile = $filePath ?? config('seat-importing.import.import_path') . '/market.csv';
+        // Resolve or Download the CSV path
+        $resolvedFile = $filePath;
+        
+        if ($download && $source === 'fuzzwork_csv') {
+            $this->info("Downloading latest data for region {$regionId} from Fuzzwork...");
+            $url = "https://market.fuzzwork.co.uk/aggregates/region/{$regionId}.csv";
+            $downloadPath = config('seat-importing.import.import_path') . "/region_{$regionId}.csv";
+            
+            if (!File::exists(dirname($downloadPath))) {
+                File::makeDirectory(dirname($downloadPath), 0755, true);
+            }
+
+            try {
+                $response = Http::get($url);
+                if ($response->successful()) {
+                    File::put($downloadPath, $response->body());
+                    $resolvedFile = $downloadPath;
+                    $this->info("Download complete: {$resolvedFile}");
+                } else {
+                    $this->error("Failed to download from Fuzzwork: " . $response->status());
+                    return self::FAILURE;
+                }
+            } catch (\Exception $e) {
+                $this->error("Download error: " . $e->getMessage());
+                return self::FAILURE;
+            }
+        }
+
+        if (!$resolvedFile) {
+            $resolvedFile = config('seat-importing.import.import_path') . '/market.csv';
+        }
 
         if (! file_exists($resolvedFile)) {
             $this->error("CSV file not found: {$resolvedFile}");
+            $this->line("Tip: Use --download to fetch Jita data automatically.");
             return self::FAILURE;
         }
 
@@ -94,7 +106,6 @@ class ImportMarketData extends Command
             $this->warn('DRY RUN — no data will be written.');
         }
 
-        // Parse the CSV once and share rows across all hubs
         $this->line('Parsing CSV…');
 
         try {
@@ -113,7 +124,6 @@ class ImportMarketData extends Command
             return self::SUCCESS;
         }
 
-        // Attempt SDE type lookup (names + volumes) — gracefully degrade if SDE unavailable
         $sdeTypes = $this->loadSdeTypes(array_column($rows, 'type_id'));
 
         $exitCode = self::SUCCESS;
@@ -143,6 +153,7 @@ class ImportMarketData extends Command
                 ]);
 
                 $this->metricsService->flushHubCache($hub->id);
+                $this->metricsService->warmHubCache($hub->id);
                 $this->info("  ✓ {$processed} rows imported, {$failed} failed.");
             } catch (\Exception $e) {
                 $log->update([
@@ -161,93 +172,59 @@ class ImportMarketData extends Command
         return $exitCode;
     }
 
-    // -------------------------------------------------------------------------
-    // CSV parsers
-    // -------------------------------------------------------------------------
-
-    /**
-     * Parse Fuzzwork aggregate CSV.
-     * Expected columns: typeID, buy_max, buy_volume, sell_min, sell_volume, ...
-     */
     private function parseFuzzworkCsv(string $path): array
     {
         $rows   = [];
         $handle = fopen($path, 'r');
-
-        if ($handle === false) {
-            throw new \RuntimeException("Cannot open file: {$path}");
-        }
+        if ($handle === false) throw new \RuntimeException("Cannot open file: {$path}");
 
         $headers = null;
-
         while (($line = fgetcsv($handle)) !== false) {
             if ($headers === null) {
-                // Normalise header names to lower-case for robust matching
                 $headers = array_map('strtolower', array_map('trim', $line));
                 continue;
             }
-
             $row = array_combine($headers, $line);
-
-            // Resolve column names that differ between Fuzzwork download variants
             $typeId      = (int) ($row['typeid'] ?? $row['type_id'] ?? 0);
             $jitaSell    = (float) ($row['sell_min'] ?? $row['sell_percentile'] ?? 0);
             $jitaBuy     = (float) ($row['buy_max'] ?? 0);
             $sellVolume  = (float) ($row['sell_volume'] ?? 0);
-            $buyVolume   = (float) ($row['buy_volume'] ?? 0);
 
-            if ($typeId <= 0) {
-                continue;
-            }
+            if ($typeId <= 0) continue;
 
             $rows[] = [
                 'type_id'       => $typeId,
                 'jita_sell'     => $jitaSell,
                 'jita_buy'      => $jitaBuy,
-                // For Fuzzwork (Jita source), local prices equal Jita prices until hub CSV is provided
                 'local_sell'    => $jitaSell,
                 'local_buy'     => $jitaBuy,
-                'weekly_volume' => $sellVolume > 0 ? $sellVolume / 4 : 0, // monthly → weekly approximation
+                'weekly_volume' => $sellVolume > 0 ? $sellVolume / 4 : 0,
                 'current_stock' => (int) ($row['sell_orders'] ?? 0),
             ];
         }
-
         fclose($handle);
         return $rows;
     }
 
-    /**
-     * Parse Tycoon market CSV.
-     * Expected columns: typeid, region_id, buy_max, buy_volume, sell_min, sell_volume, timestamp
-     */
     private function parseTycoonCsv(string $path): array
     {
         $rows   = [];
         $handle = fopen($path, 'r');
-
-        if ($handle === false) {
-            throw new \RuntimeException("Cannot open file: {$path}");
-        }
+        if ($handle === false) throw new \RuntimeException("Cannot open file: {$path}");
 
         $headers = null;
-
         while (($line = fgetcsv($handle)) !== false) {
             if ($headers === null) {
                 $headers = array_map('strtolower', array_map('trim', $line));
                 continue;
             }
-
             $row = array_combine($headers, $line);
-
             $typeId     = (int) ($row['typeid'] ?? 0);
             $sellMin    = (float) ($row['sell_min'] ?? 0);
             $buyMax     = (float) ($row['buy_max'] ?? 0);
             $sellVol    = (float) ($row['sell_volume'] ?? 0);
-            $buyVol     = (float) ($row['buy_volume'] ?? 0);
 
-            if ($typeId <= 0) {
-                continue;
-            }
+            if ($typeId <= 0) continue;
 
             $rows[] = [
                 'type_id'       => $typeId,
@@ -259,22 +236,10 @@ class ImportMarketData extends Command
                 'current_stock' => 0,
             ];
         }
-
         fclose($handle);
         return $rows;
     }
 
-    // -------------------------------------------------------------------------
-    // Import logic
-    // -------------------------------------------------------------------------
-
-    /**
-     * Upsert item rows for a single hub in configured batch sizes.
-     *
-     * @param  array[] $rows      Parsed CSV rows
-     * @param  array   $sdeTypes  typeId => ['type_name' => ..., 'volume_m3' => ...]
-     * @return array{int, int}    [processed, failed]
-     */
     private function importRowsForHub(MarketHub $hub, array $rows, array $sdeTypes): array
     {
         $iskPerM3   = $hub->effectiveIskPerM3();
@@ -288,24 +253,18 @@ class ImportMarketData extends Command
 
         foreach (array_chunk($rows, $batchSize) as $chunk) {
             $upsertRows = [];
-
             foreach ($chunk as $row) {
                 try {
                     $typeId   = (int) $row['type_id'];
                     $sdeEntry = $sdeTypes[$typeId] ?? null;
-
                     $volumeM3 = (float) ($sdeEntry['volume_m3'] ?? 0);
                     $typeName = $sdeEntry['type_name'] ?? $row['type_name'] ?? null;
 
-                    // Core price/volume data
                     $localSell    = (float) ($row['local_sell'] ?? 0);
                     $localBuy     = (float) ($row['local_buy'] ?? 0);
                     $jitaSell     = (float) ($row['jita_sell'] ?? 0);
-                    $jitaBuy      = (float) ($row['jita_buy'] ?? 0);
                     $weeklyVolume = (float) ($row['weekly_volume'] ?? 0);
-                    $stock        = (int) ($row['current_stock'] ?? 0);
 
-                    // Derived metrics
                     $metrics = $this->metricsService->calculateMetrics([
                         'local_sell'    => $localSell,
                         'jita_sell'     => $jitaSell,
@@ -320,8 +279,8 @@ class ImportMarketData extends Command
                         'local_sell_price' => $localSell,
                         'local_buy_price'  => $localBuy,
                         'jita_sell_price'  => $jitaSell,
-                        'jita_buy_price'   => $jitaBuy,
-                        'current_stock'    => $stock,
+                        'jita_buy_price'   => (float) ($row['jita_buy'] ?? 0),
+                        'current_stock'    => (int) ($row['current_stock'] ?? 0),
                         'weekly_volume'    => $weeklyVolume,
                         'volume_m3'        => $volumeM3,
                         'import_cost'      => $metrics['import_cost'],
@@ -331,19 +290,17 @@ class ImportMarketData extends Command
                         'created_at'       => Carbon::now(),
                         'updated_at'       => Carbon::now(),
                     ];
-
                     $processed++;
                 } catch (\Exception $e) {
                     $failed++;
-                    $this->line("\n  <error>Row error (typeId={$row['type_id']}): {$e->getMessage()}</error>");
                 }
             }
 
             if (! empty($upsertRows)) {
                 DB::table('market_item_data')->upsert(
                     $upsertRows,
-                    ['hub_id', 'type_id', 'data_date'], // unique key columns
-                    [                                   // columns to update on conflict
+                    ['hub_id', 'type_id', 'data_date'],
+                    [
                         'type_name', 'local_sell_price', 'local_buy_price',
                         'jita_sell_price', 'jita_buy_price', 'current_stock',
                         'weekly_volume', 'volume_m3', 'import_cost',
@@ -351,50 +308,25 @@ class ImportMarketData extends Command
                     ]
                 );
             }
-
             $bar->advance(count($chunk));
         }
-
         $bar->finish();
-        $this->line('');
-
         return [$processed, $failed];
     }
 
-    /**
-     * Load type names and volumes from the SDE invTypes table.
-     * Returns an associative array keyed by typeID.
-     * Gracefully returns an empty array if the SDE connection is unavailable.
-     *
-     * @param  int[] $typeIds
-     * @return array<int, array{type_name: string, volume_m3: float}>
-     */
     private function loadSdeTypes(array $typeIds): array
     {
         $typeIds = array_unique(array_filter($typeIds));
-
-        if (empty($typeIds)) {
-            return [];
-        }
-
+        if (empty($typeIds)) return [];
         try {
             $sde = DB::connection('sde');
-            $rows = $sde->table('invTypes')
-                ->select('typeID', 'typeName', 'volume')
-                ->whereIn('typeID', $typeIds)
-                ->get();
-
+            $rows = $sde->table('invTypes')->select('typeID', 'typeName', 'volume')->whereIn('typeID', $typeIds)->get();
             $result = [];
             foreach ($rows as $row) {
-                $result[(int) $row->typeID] = [
-                    'type_name' => $row->typeName,
-                    'volume_m3' => (float) $row->volume,
-                ];
+                $result[(int) $row->typeID] = ['type_name' => $row->typeName, 'volume_m3' => (float) $row->volume];
             }
             return $result;
         } catch (\Exception) {
-            // SDE not available in this installation — continue with no type names
-            $this->warn('SDE connection unavailable; type names and volumes will not be populated.');
             return [];
         }
     }

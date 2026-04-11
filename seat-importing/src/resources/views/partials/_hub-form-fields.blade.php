@@ -1,7 +1,3 @@
-{{--
-    Reusable hub form field set.
-    Pass $hub = null for a new hub form, or an existing MarketHub for editing.
---}}
 <div class="row">
     <div class="col-sm-8">
         <div class="form-group mb-2">
@@ -24,29 +20,32 @@
 <div class="row">
     <div class="col-sm-4">
         <div class="form-group mb-2">
-            <label>Solar System ID</label>
-            <input type="number" min="1" name="solar_system_id"
-                class="form-control form-control-sm"
-                value="{{ old('solar_system_id', $hub?->solar_system_id) }}"
-                placeholder="e.g. 30004759">
+            <label>Solar System</label>
+            <select name="solar_system_id" class="form-control form-control-sm select2-system" style="width: 100%">
+                @if($hub?->solar_system_id)
+                    <option value="{{ $hub->solar_system_id }}" selected>ID: {{ $hub->solar_system_id }}</option>
+                @endif
+            </select>
         </div>
     </div>
     <div class="col-sm-4">
         <div class="form-group mb-2">
-            <label>Region ID</label>
-            <input type="number" min="1" name="region_id"
-                class="form-control form-control-sm"
-                value="{{ old('region_id', $hub?->region_id) }}"
-                placeholder="e.g. 10000002">
+            <label>Region</label>
+            <select name="region_id" class="form-control form-control-sm select2-region" style="width: 100%">
+                @if($hub?->region_id)
+                    <option value="{{ $hub->region_id }}" selected>ID: {{ $hub->region_id }}</option>
+                @endif
+            </select>
         </div>
     </div>
     <div class="col-sm-4">
         <div class="form-group mb-2">
-            <label>Structure ID <small class="text-muted">(optional)</small></label>
-            <input type="number" min="1" name="structure_id"
-                class="form-control form-control-sm"
-                value="{{ old('structure_id', $hub?->structure_id) }}"
-                placeholder="e.g. 1035466617946">
+            <label>Structure <small class="text-muted">(optional)</small></label>
+            <select name="structure_id" class="form-control form-control-sm select2-structure" style="width: 100%">
+                @if($hub?->structure_id)
+                    <option value="{{ $hub->structure_id }}" selected>ID: {{ $hub->structure_id }}</option>
+                @endif
+            </select>
         </div>
     </div>
 </div>

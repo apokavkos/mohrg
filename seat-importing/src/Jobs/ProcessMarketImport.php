@@ -85,6 +85,7 @@ class ProcessMarketImport implements ShouldQueue
                 ]);
 
                 $metricsService->flushHubCache($hub->id);
+                $metricsService->warmHubCache($hub->id);
             } catch (\Exception $e) {
                 $log->update([
                     'status'        => 'failed',
