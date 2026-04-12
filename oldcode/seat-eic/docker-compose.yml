@@ -1,0 +1,85 @@
+services:
+
+  front:
+    image: ghcr.io/eveseat/seat:5
+    restart: always
+    command: web
+    volumes:
+      - "seat-storage:/var/www/seat/storage"
+      - /root/seat-eic:/var/www/seat/packages/seat-assets
+      - ./packages:/var/www/seat/packages  # development only
+    env_file:
+      - .env
+    depends_on:
+      - cache
+    networks:
+      - seat-gateway
+      - seat-internal
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10Mb"
+        max-file: "5"
+
+  worker:
+    image: ghcr.io/eveseat/seat:5
+    restart: always
+    command: worker
+    volumes:
+      - "seat-storage:/var/www/seat/storage"
+      - /root/seat-eic:/var/www/seat/packages/seat-assets
+      - ./packages:/var/www/seat/packages  # development only
+    env_file:
+      - .env
+    depends_on:
+      - cache
+      - front
+    networks:
+      - seat-gateway
+      - seat-internal
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10Mb"
+        max-file: "5"
+
+  scheduler:
+    image: ghcr.io/eveseat/seat:5
+    restart: always
+    command: cron
+    volumes:
+      - "seat-storage:/var/www/seat/storage"
+      - /root/seat-eic:/var/www/seat/packages/seat-assets
+      - ./packages:/var/www/seat/packages  # development only
+    env_file:
+      - .env
+    depends_on:
+      - cache
+      - worker
+    networks:
+      - seat-gateway
+      - seat-internal
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10Mb"
+        max-file: "5"
+
+  cache:
+    image: redis:7-alpine
+    restart: always
+    networks:
+      - seat-internal
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10Mb"
+        max-file: "5"
+
+volumes:
+    seat-storage:
+
+networks:
+    seat-gateway:
+    seat-internal:
+      internal: true

@@ -1,0 +1,10 @@
+services:
+
+  front:
+    ports:
+      - "127.0.0.1:${PROXY_BACKEND_HTTP_PORT}:8080"
+    networks:
+      - seat-frontend
+
+networks:
+  seat-frontend:

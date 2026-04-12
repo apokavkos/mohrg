@@ -8,6 +8,7 @@ EIC is an industrial logistics engine for EVE Online, implemented as a SeAT plug
 - **Primary Domain:** `apokavkos.com`
 - **Architecture:** Containerized using Docker and `docker-compose`.
 - **SeAT (`seat-docker`):** Core EVE API manager using MariaDB.
+- **jEveSeAT:** SeAT plugin providing a bridge to the jEveAssets Java engine for high-density inventory tracking.
 - **EVE SDE (`eve-sde`):** Standalone MariaDB instance for Static Data Export.
 - **Intelligence Bridge (MCP Server):** Python-based FastMCP server for direct SQL queries against SeAT and SDE databases, exposed at `evemcp.apokavkos.com/sse`.
 - **Security:** Authelia (`sso.apokavkos.com`) provides OIDC for the MCP server.
@@ -25,6 +26,7 @@ EIC is an industrial logistics engine for EVE Online, implemented as a SeAT plug
 
 ## 4. Technical Stack
 - **Plugin Type:** SeAT Plugin (Laravel-based).
+- **jEveSeAT Integration:** Integrated high-density inventory reporting via AG Grid.
 - **PHP Namespace:** `Apokavkos\EveIntelligenceCenter`.
 - **Composer Package:** `apokavkos/eve-intelligence-center`.
 - **Data Persistence:** EIC-specific tables (`eic_stockpiles`, `eic_stockpile_items`) + SeAT core tables.

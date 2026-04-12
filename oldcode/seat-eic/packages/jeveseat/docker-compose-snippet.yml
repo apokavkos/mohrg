@@ -1,0 +1,21 @@
+version: "3.8"
+
+services:
+  jeveassets-headless:
+    image: openjdk:11-slim
+    container_name: jeveassets-headless
+    volumes:
+      - /path/to/seat/storage/app/jeveassets:/jeveassets
+    working_dir: /jeveassets
+    command: >
+      bash -c "
+      # 1. Update data using synced tokens
+      java -Djava.awt.headless=true -jar jeveassets.jar -u
+      
+      # 2. Export assets (assuming a post-processing script creates assets.json or it's native)
+      java -Djava.awt.headless=true -jar jeveassets.jar -e -a -csv -f /jeveassets
+      
+      # 3. Optional: Convert CSV to JSON if native -json is missing
+      # (Add custom conversion logic here if needed)
+      "
+    restart: unless-stopped
