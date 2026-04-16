@@ -1,2 +1,8 @@
 .DS_Store
 .vscode/
+
+# Secrets - never commit these
+.env
+acme/acme.json
+**/acme.json
+*.sql
